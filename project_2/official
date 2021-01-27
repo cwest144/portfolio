@@ -1,0 +1,10 @@
+(1)$ CMD (Depth = 1):  SIMPLE,  argv[0] = A
+CMD (Depth = 0):  PIPE
+CMD (Depth = 1):  SIMPLE,  argv[0] = B
+(2)$ CMD (Depth = 2):  SIMPLE,  argv[0] = A
+CMD (Depth = 1):  SEP_AND
+CMD (Depth = 3):  SIMPLE,  argv[0] = B
+CMD (Depth = 2):  PIPE
+CMD (Depth = 3):  SIMPLE,  argv[0] = C
+CMD (Depth = 0):  SEP_END
+(3)$ 
