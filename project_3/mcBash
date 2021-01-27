@@ -1,0 +1,355 @@
+#!/usr/bin/python3
+#Chris West, cgw29
+
+import sys
+import re
+import os
+
+#main handles prompts and takes in user input
+def main():
+
+	promptnum = 1 #the current promptnumber to be printed
+
+	try:
+
+		print('({})$ '.format(promptnum), end = '', flush = True) #visual prompt
+		
+		associations = os.environ #initialize dictionary of key-value pairs
+
+		#read input line by line
+		for line in sys.stdin:
+
+
+			#if line is all whitespace do nothing and don't increment prompt
+			if line.isspace() == False:
+				
+				#pass line to expand function
+				output = expand(line, associations, 0)
+
+				#None signals an error
+				if output != None:
+					
+					#if no error, print result
+					print(">> {}".format(output), end = '')
+					
+					#iterate prompt
+					promptnum = promptnum + 1
+
+				#if error, print to stderr
+				else:
+					print("mcBash: invalid expression", file=sys.stderr)
+
+				#prompt for the next input line
+				print('({})$ '.format(promptnum), end = '', flush = True)
+
+				if line[-1] != '\n':
+					#handle ctrl-d
+					#print newline before exiting
+					print("")
+					
+					exit(1)
+
+			elif line[-1] != '\n':
+				#handle ctrl-d
+
+				#prompt for the next input line
+				print('({})$ '.format(promptnum), end = '', flush = True)
+
+				#print newline before exiting
+				print("")
+
+				exit(1)			
+
+	except KeyboardInterrupt:
+		print("")
+		#handle ctrl-c
+		exit(1)
+
+	#print newline before exiting
+	print("")
+
+	exit(0)
+
+
+#expand() expands the line, using associations to find and add key/value pairs
+#if flag == 1, then line[0] = unescaped $ and what follows has not been expanded yet
+#expand() is used recursively
+def expand(line, associations, flag):
+
+	#flag indicates we need to expand the beginning of the line
+	#here we also make sure the line is not just "$"
+	#and that the second char of the line is valid to follow a "$"
+	if flag and len(line) >1 and isexpression(line[1]):
+		
+		#if this is a bracketed expression
+		if line[1] == "{":
+
+			bracket_count = 1
+			index = 2
+			escaped = False
+			
+			#we'll loop through until we find the matching closing bracket
+			#use escaped to ignore escaped brackets
+			#increase bracket count if "{", decrease if "}"
+			#end search when bracket_count == 0
+			while bracket_count > 0 and index < len(line):
+				if escaped:
+					escaped = False
+				elif line[index] == "{":
+					bracket_count += 1
+				elif line[index] == "}":
+					bracket_count -= 1
+				elif line[index] == "\\":
+					escaped = True
+				index += 1
+
+			#if we got to the end of the line without  finding a matching closing bracket
+			#return None (error)
+			if bracket_count != 0:
+				return None
+
+			#else we'll replace everything up to the closing bracket
+			#toreplace includes everything we need to get rid of
+			#phrase includes the things we need to match in associations (i.e. not the "$" or the brackets)
+			toreplace = line[:index]
+			phrase = toreplace[2:-1]
+
+			#if there is nothing between the brackets
+			#return None (error)
+			if phrase == "":
+				return None
+
+			#this will tell us which expression types to match with
+			bracketed = True
+
+		else:
+			#if "$" is not followed by a bracket, we'll use a regex search to return the beginning of line until
+			#an unescaped character is not alphanumeric or "_"
+			#searching line[1:] precludes the "$" at the beginning of line
+			phraseresult = re.match('^([\w]|\\.)+', line[1:])
+
+			#if there was a match and the beginning of the match is alphabetic or "_" (i.e. a valid beginning to NAME)
+			if (line[1].isalpha() or line[1] == "_") and phraseresult:
+				
+				#then the phrase is the match
+				phrase = phraseresult.group(0)
+				
+				#and toreplace is the "$" plus the phrase
+				toreplace = "$" + phrase
+
+			#if not $NAME then maybe $D
+			elif line[1].isnumeric():
+				phrase = line[1]
+				toreplace = "$" + phrase
+
+			#or maybe $*
+			elif line[1] == "*":
+				phrase = "*"
+				toreplace = "$" + phrase
+			
+			#all possible expression types checked, no phrase to expand
+			else:	
+				phrase = ""
+				toreplace = "$"
+				#we'll later swap these
+
+			#phrase was not bracketed in this case
+			bracketed = False
+
+		#case: ${NAME=WORD} or ${NAME-WORD}
+		if ("=" in phrase or "-" in phrase) and bracketed:
+			
+			#check if "-" or "=" appears earlier
+			test1 = phrase.split("=")[0]
+			test2 = phrase.split("-")[0]
+
+			#expression type is whichever appears earlier
+			if len(test1) < len(test2):
+				exptype = "="
+			else:
+				exptype = "-"
+			
+			#case: ${NAME=WORD}
+			if exptype == "=":
+
+				#key is everything preceding the first "="
+				key = phrase.split("=")[0]
+				#velue is everything following the first "="
+				value = phrase.replace(key + "=", '', 1)
+
+				#make sure all of key is alphanumeric or "_"
+				if re.match('^[\w]+$', key) is not None:
+					
+					#if the key is already defined
+					if key in associations:
+						#prefix is the result of the expansion
+						prefix = associations[key]
+
+					#if key is not defined
+					else:
+						#expand the value recursively
+						expansion = expand(value, associations, 0)
+						
+						#if there was an error
+						#return None (error)
+						if expansion == None:
+							return None
+
+						#else, update associations with the new key/value pair
+						associations[key] = expansion
+						#assign prefix with the expanded value
+						prefix = expansion
+				
+				#else, error
+				else:
+					return None
+
+			#case: ${NAME-WORD}
+			else:
+				
+				#key is everything preceding the first "-"
+				key = phrase.split("-")[0]
+				#value is everything after
+				value = phrase.replace(key + "-", '', 1)
+
+				#make sure key is valid
+				if re.match('^[\w]+$', key) is not None:
+					
+					#if key already defined
+					if key in associations:
+						#return that definition
+						prefix = associations[key]
+					
+					#if not already defined
+					else:
+						#expand the value
+						expansion = expand(value, associations, 0)
+						
+						#check for valid expansion
+						if expansion == None:
+							return None
+
+						#return the expansion if valid
+						prefix = expansion
+				
+				#else, error
+				else:
+					return None
+
+		#case: $D or $N
+		elif phrase.isnumeric():
+
+			#convert string to int
+			N = int(phrase)
+
+			#make sure there are enough command line args
+			if N < len(sys.argv):
+				#if there are, replace with the Nth command line arg
+				prefix = sys.argv[N]
+			
+			#if not, expansion is empty string
+			else:
+				prefix = ""
+
+		#case: $*
+		elif phrase == "*" and not bracketed:
+			#check that there are command line args
+			if len(sys.argv) > 1:
+				#join the command line args into a single string separated by spaces
+				prefix = " ".join(str(x) for x in sys.argv[1:])
+			
+			#if not, expansion is empty string
+			else:
+				prefix = ""
+		
+		#case: $NAME and all of NAME are valid chars	
+		elif re.match('^([\w]|\\.)+$', phrase) is not None:
+
+			#check if NAME is already defined
+			if phrase in associations:
+				#if so, return the value associated
+				prefix = associations[phrase]
+			
+			#if not, expansion is empty string
+			else:
+				prefix = ""
+		
+		#if the phrase was bracketed but didn't match an expression type
+		#return None (error)
+		elif bracketed:
+			return None
+		
+		#if the phrase was not bracketed and didn't match an expression type
+		#effectively do nothing (phrase will be returned in place of toreplace)
+		else:
+			prefix = toreplace
+
+		#remove the first instance of toreplace from line
+		line = line.replace(toreplace, '', 1)
+
+	#if flagged but beginning is invalid, "$" has no special meaning
+	elif flag and len(line) >1:
+		prefix = "$"
+		line = line[1:]
+
+	#if flagged and len(line) = 1, then line = "$", so just return "$"
+	elif flag:
+		return line
+	
+	#if not flagged, prefix is empty
+	else:
+		prefix = ""
+
+	#search for the next unescaped "$"
+	result = re.search(r"([^\\\$]|\\.)*\$", line)
+
+	#if there's a match and it occurs at the beginning of the line
+	if result and line[:len(result.group(0))]==result.group(0):
+
+		#save everything up to the end of the match (not including the "$"
+		#that begins the next expression)
+		middle = result.group(0)[:-1]
+
+		#the end of the line will be the expansion of the expression following the "$"
+		#and whatever comes after that
+		suffix = expand(line.replace(middle, '', 1), associations, 1)
+
+		#check for error
+		if suffix == None:
+			return None
+
+		#else, return the three parts concatenated together
+		return prefix + middle + suffix
+
+	#if there was a match but it wasn't at the beginning of the line (an escaped "$")
+	elif result:
+
+		#middle is everything up to and including the escaped "$"
+		middle = line[:result.start(0)+1]
+
+		#expand the rest of the line, with flag = 0
+		suffix = expand(line.replace(middle, '', 1), associations, 0)
+		
+		#check for error
+		if suffix == None:
+			return None
+
+		#else, return the three parts concatenated together
+		return prefix + middle + suffix
+
+	#if no more unescaped "$" return the prefix with the rest of the line
+	else:
+		return prefix + line
+
+
+#checks if a char is a valid character to follow a "$"
+def isexpression(char):
+	if char.isalnum() or char == "_" or char == "{" or char == "*":
+		return True
+	else:
+		return False
+
+
+#run program
+if __name__ == "__main__":
+	main()
